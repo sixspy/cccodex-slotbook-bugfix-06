@@ -1,10 +1,10 @@
-"""对账：档期 booked 与正式册 seats 同源校验。"""
+"""对账：档期 booked 与正式册 seats 同源校验；候补名次册无空洞校验。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
 from auth import AuthHeader, require_user
-from db import connect
+from db import connect, waitlist_rank_state
 
 router = APIRouter(tags=["reconcile"])
 
@@ -21,7 +21,8 @@ def reconcile_all(authorization: AuthHeader = None):
                    WHERE slot_id=? AND status='已确认'""",
                 (s["id"],),
             ).fetchone()["s"]
-            ok = int(booked_sum) == int(s["booked"])
+            rank_state = waitlist_rank_state(conn, s["id"])
+            ok = int(booked_sum) == int(s["booked"]) and rank_state["waitlist_rank_ok"]
             items.append(
                 {
                     "slot_code": s["code"],
@@ -30,6 +31,7 @@ def reconcile_all(authorization: AuthHeader = None):
                     "generation": s["generation"],
                     "ok": ok,
                     "status": s["status"],
+                    **rank_state,
                 }
             )
         return {"items": items, "all_ok": all(i["ok"] for i in items)}
@@ -51,13 +53,14 @@ def reconcile_one(code: str, authorization: AuthHeader = None):
             "SELECT COUNT(*) c FROM holds WHERE slot_id=? AND status='占位中'",
             (s["id"],),
         ).fetchone()["c"]
+        rank_state = waitlist_rank_state(conn, s["id"])
         return {
             "slot_code": code,
             "slot_booked": s["booked"],
             "booking_seats": booked_sum,
             "open_holds": holds,
-            "ok": int(booked_sum) == int(s["booked"]),
+            "ok": int(booked_sum) == int(s["booked"]) and rank_state["waitlist_rank_ok"],
             "generation": s["generation"],
-            # BUGFIX-06 埋雷：对账不校验候补名次空洞
-            "waitlist_rank_ok": True,
+            # 名次册真校验：同档候补名次连续、可晋升头唯一且为队首
+            **rank_state,
         }

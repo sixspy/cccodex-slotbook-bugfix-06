@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from auth import AuthHeader, require_user, require_writer
-from db import connect, write_audit
+from db import connect, rerank_slot, write_audit
 from locks import release, require_lock
 
 router = APIRouter(tags=["holds"])
@@ -58,6 +58,7 @@ def create_hold(body: HoldIn, authorization: AuthHeader = None):
                        VALUES (?,?,?,?,?,?)""",
                     (slot["id"], body.party_key, body.seats, "容量不足", "候补中", now),
                 )
+                rerank_slot(conn, slot["id"], now)
                 write_audit(
                     conn,
                     user,

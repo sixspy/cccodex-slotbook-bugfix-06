@@ -87,6 +87,14 @@ CREATE TABLE IF NOT EXISTS waitlist(
   status TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS waitlist_rank(
+  wait_id INTEGER PRIMARY KEY,
+  slot_id INTEGER NOT NULL,
+  queue_rank INTEGER NOT NULL,
+  promotable INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(wait_id) REFERENCES waitlist(id)
+);
 CREATE TABLE IF NOT EXISTS slot_locks(
   lock_key TEXT PRIMARY KEY,
   holder TEXT NOT NULL,
@@ -139,6 +147,62 @@ def write_audit(conn, actor: str, action: str, target: str, payload: dict | None
             datetime.now().isoformat(timespec="seconds"),
         ),
     )
+
+
+def rerank_slot(conn, slot_id: int, now: str | None = None) -> list[dict]:
+    """名次册重算：同档 `候补中` 按 id 升序得连续 1..N，头名即可晋升头。
+
+    只写 waitlist_rank，不改 waitlist 行；调用方负责事务与档锁。
+    """
+    from datetime import datetime
+
+    stamp = now or datetime.now().isoformat(timespec="seconds")
+    rows = conn.execute(
+        "SELECT id FROM waitlist WHERE slot_id=? AND status='候补中' ORDER BY id ASC",
+        (slot_id,),
+    ).fetchall()
+    conn.execute("DELETE FROM waitlist_rank WHERE slot_id=?", (slot_id,))
+    ranked: list[dict] = []
+    for i, r in enumerate(rows, start=1):
+        promotable = 1 if i == 1 else 0
+        conn.execute(
+            """INSERT INTO waitlist_rank(wait_id,slot_id,queue_rank,promotable,updated_at)
+               VALUES (?,?,?,?,?)""",
+            (r["id"], slot_id, i, promotable, stamp),
+        )
+        ranked.append(
+            {"wait_id": r["id"], "queue_rank": i, "promotable": bool(promotable)}
+        )
+    return ranked
+
+
+def rerank_all(conn, now: str | None = None) -> None:
+    for s in conn.execute("SELECT id FROM slots").fetchall():
+        rerank_slot(conn, s["id"], now)
+
+
+def waitlist_rank_state(conn, slot_id: int) -> dict:
+    """对账用：同档候补名次是否连续、可晋升头是否唯一且为队首。"""
+    rows = conn.execute(
+        """SELECT w.id, r.queue_rank, r.promotable
+           FROM waitlist w
+           LEFT JOIN waitlist_rank r ON r.wait_id=w.id
+           WHERE w.slot_id=? AND w.status='候补中'
+           ORDER BY w.id ASC""",
+        (slot_id,),
+    ).fetchall()
+    ranks = [r["queue_rank"] for r in rows]
+    heads = [r["id"] for r in rows if r["promotable"]]
+    ok = ranks == list(range(1, len(rows) + 1))
+    ok = ok and len(heads) == (1 if rows else 0)
+    if rows:
+        ok = ok and bool(rows[0]["promotable"]) and heads[0] == rows[0]["id"]
+    return {
+        "waitlist_rank_ok": ok,
+        "waitlist_waiting": len(rows),
+        "waitlist_head": rows[0]["id"] if rows else None,
+        "waitlist_ranks": ranks,
+    }
 
 
 def ensure_users(conn) -> None:
@@ -215,4 +279,6 @@ def init_db() -> None:
         conn.executescript(SCHEMA)
         ensure_users(conn)
         seed_if_empty(conn)
+        # 名次册随库启动对齐全档，杜绝历史空洞
+        rerank_all(conn)
         conn.commit()

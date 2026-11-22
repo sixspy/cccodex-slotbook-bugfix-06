@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import sqlite3
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -22,11 +24,21 @@ def try_acquire(conn, lock_key: str, holder: str) -> bool:
         "SELECT holder FROM slot_locks WHERE lock_key=?", (lock_key,)
     ).fetchone()
     if row is None:
-        conn.execute(
-            "INSERT INTO slot_locks(lock_key,holder,acquired_at) VALUES (?,?,?)",
-            (lock_key, holder, now),
-        )
-        return True
+        try:
+            conn.execute(
+                "INSERT INTO slot_locks(lock_key,holder,acquired_at) VALUES (?,?,?)",
+                (lock_key, holder, now),
+            )
+            return True
+        except sqlite3.IntegrityError:
+            # 真并发：两个取消同时 SELECT 到空，后插入者转争用痕
+            row = conn.execute(
+                "SELECT holder FROM slot_locks WHERE lock_key=?", (lock_key,)
+            ).fetchone()
+            if row is not None and row["holder"] == holder:
+                return True
+            if row is None:
+                return False
     if row["holder"] == holder:
         return True
     conn.execute(

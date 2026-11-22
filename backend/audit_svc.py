@@ -32,7 +32,12 @@ def proof(party_key: str, authorization: AuthHeader = None):
             "SELECT * FROM bookings WHERE party_key=? ORDER BY id DESC", (party_key,)
         ).fetchall()
         waits = conn.execute(
-            "SELECT * FROM waitlist WHERE party_key=? ORDER BY id DESC", (party_key,)
+            """SELECT w.*, s.code AS slot_code, r.queue_rank, r.promotable
+               FROM waitlist w
+               JOIN slots s ON s.id=w.slot_id
+               LEFT JOIN waitlist_rank r ON r.wait_id=w.id
+               WHERE w.party_key=? ORDER BY w.id DESC""",
+            (party_key,),
         ).fetchall()
         return {
             "party_key": party_key,

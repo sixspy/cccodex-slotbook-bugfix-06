@@ -12,10 +12,11 @@ export const auditViewTemplate = `
     </table>
     <h3>审计</h3>
     <table>
-      <thead><tr><th>人</th><th>动作</th><th>目标</th><th>时</th></tr></thead>
+      <thead><tr><th>人</th><th>动作</th><th>目标</th><th>详情</th><th>时</th></tr></thead>
       <tbody>
         <tr v-for="a in audits" :key="a.id">
-          <td>{{ a.actor }}</td><td>{{ a.action }}</td><td>{{ a.target }}</td><td>{{ a.created_at }}</td>
+          <td>{{ a.actor }}</td><td>{{ a.action }}</td><td>{{ a.target }}</td>
+          <td class="payload">{{ a.payload }}</td><td>{{ a.created_at }}</td>
         </tr>
       </tbody>
     </table>
